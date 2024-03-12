@@ -3,16 +3,15 @@ import laspy
 import tqdm
 
 class Visibility:
-    def __init__(self, area_names, sampling="random", sample_ratio=1000, version=0):
+    def __init__(self, area_names, sampling="random", sample_ratio=1000):
         # Initialize Visibility object
 
         self.area_names = area_names if isinstance(area_names, list) else [area_names]
         self.sampling = sampling
         self.sample_ratio = sample_ratio
-        self.version = version
         self.public_header_list = []
         self.n_points_total = 0
-        self.points_array = None
+        self.points_array = np.empty((0, 6), dtype=float)
         self.p_array = None
         self.n_p = 0
         self.visible_indices_array = np.array([], dtype=int)
@@ -53,13 +52,9 @@ class Visibility:
                     file_points_array[current_index:current_index+chunk_size, 4] = points['green']
                     file_points_array[current_index:current_index+chunk_size, 5] = points['blue']
                     current_index += chunk_size
-                file_points_array = file_points_array[:n_points, :]
 
                 # Update points_array and n_points_total
-                if self.points_array is None:
-                    self.points_array = file_points_array
-                else:
-                    self.points_array = np.concatenate((self.points_array, file_points_array), axis=0)
+                self.points_array = np.vstack((self.points_array, file_points_array))
                 self.n_points_total += n_points
 
 
@@ -77,6 +72,8 @@ class Visibility:
             print("** {}/{} **".format(i + 1, self.n_p))
             self._raycast_single_p(single_p, n_xy, n_xz)
 
+        # Map indices back to original order
+        self.visible_indices_array = self.order_array[self.visible_indices_array]
         self.visible_count_array = np.bincount(self.visible_indices_array)
 
 
@@ -124,11 +121,11 @@ class Visibility:
 
         # Store index of closest point (visible point) for each pair of azimuth and elevation angle
         print("Step 7/7")
-        single_p_visible_indices_array = np.full((len(unique_pairs)), self.n_points_total + 1, dtype=int)
+        visible_indices_array_signle_p = np.full((len(unique_pairs)), self.n_points_total + 1, dtype=int)
         for idx, dir_group in enumerate(tqdm.tqdm(inverse_indices)):
-            if idx < single_p_visible_indices_array[dir_group]:
-                single_p_visible_indices_array[dir_group] = idx
-        self.visible_indices_array = np.concatenate([self.visible_indices_array, single_p_visible_indices_array])
+            if idx < visible_indices_array_signle_p[dir_group]:
+                visible_indices_array_signle_p[dir_group] = idx
+        self.visible_indices_array = np.concatenate([self.visible_indices_array, visible_indices_array_signle_p])
 
 
     def add_observeds(self, n_display_p=10_000, radius=0.25):
@@ -172,13 +169,11 @@ class Visibility:
         vec_gamma_expansion = np.vectorize(gamma_expansion)
         vec_gamma_compression = np.vectorize(gamma_compression)
 
-        # 
+        # Calculate number of points without p
         if self.include_p:
             n_points_wo_p = self.n_points_total - self.n_display_p * self.n_p
         else:
             n_points_wo_p = self.n_points_total
-        print(n_points_wo_p)
-        print(self.n_points_total)
 
         if colour == "grey_scale":
 
@@ -216,10 +211,8 @@ class Visibility:
                 b = 0
                 colour_list.append((r, g, b))
 
-        print(colour_list)
         for visible_count in np.unique(self.visible_count_array):
             if visible_count > 0:
-                print(visible_count)
                 self.points_array[np.where(self.visible_count_array == visible_count), 3:] = colour_list[visible_count - 1]
             
 
@@ -228,7 +221,7 @@ class Visibility:
             self.points_array[n_points_wo_p:, 3:6] = [0, 0, 65535]
 
 
-    def export_data(self):
+    def export_data(self, version=0):
         # Export the modified LAS file
 
         # Create a new LAS object
@@ -245,9 +238,8 @@ class Visibility:
 
         # Save the modified LAS file
         new_file_name = ''.join(map(str, self.area_names))
-        new_file_path = r"Area" + new_file_name + r"_random_1_" + str(self.sample_ratio) + r"_ver" + str(self.version) + r".laz"
+        new_file_path = r"Area" + new_file_name + r"_random_1_" + str(self.sample_ratio) + r"_ver" + str(version) + r".laz"
         new_las.write(new_file_path)
-
 
 
 # if __name__ == "__main__":
