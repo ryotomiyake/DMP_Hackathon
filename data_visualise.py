@@ -213,7 +213,18 @@ class Visibility:
 
         for visible_count in np.unique(self.visible_count_array):
             if visible_count > 0:
-                self.points_array[np.where(self.visible_count_array == visible_count), 3:] = colour_list[visible_count - 1]
+                # Get indices for visible points that meet the criteria
+                visible_indices = np.where(self.visible_count_array == visible_count)[0]
+                
+                # Ensure Zg >= 0 for these points before coloring them
+                for idx in visible_indices:
+                    if self.points_array[idx, 2] >= 0:  # Check if Zg (z value) is non-negative
+                        self.points_array[idx, 3:] = colour_list[visible_count - 1]
+                    else:
+                        # If Zg < 0, do not color the point red
+                        # Optionally, color them black or leave as is
+                        # self.points_array[idx, 3:] = (0, 0, 0)  # Example to color them black
+                        pass
             
 
         # Colour observed with blue
