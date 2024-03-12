@@ -72,8 +72,7 @@ class Visibility:
             print("** {}/{} **".format(i + 1, self.n_p))
             self._raycast_single_p(single_p, n_xy, n_xz)
 
-        # Map indices back to original order
-        self.visible_indices_array = self.order_array[self.visible_indices_array]
+        # 
         self.visible_count_array = np.bincount(self.visible_indices_array)
 
 
@@ -112,8 +111,8 @@ class Visibility:
 
         # Sort points_geo_array for efficient ray casting
         print("Step 5/7")
-        self.order_array = np.lexsort((points_geo_array[:, 5], points_geo_array[:, 4], points_geo_array[:, 3]))
-        points_geo_array = points_geo_array[self.order_array]
+        order_array = np.lexsort((points_geo_array[:, 5], points_geo_array[:, 4], points_geo_array[:, 3]))
+        points_geo_array = points_geo_array[order_array]
         
         #  Find unique pairs of azimuth and elevation angle
         print("Step 6/7")
@@ -125,6 +124,11 @@ class Visibility:
         for idx, dir_group in enumerate(tqdm.tqdm(inverse_indices)):
             if idx < visible_indices_array_signle_p[dir_group]:
                 visible_indices_array_signle_p[dir_group] = idx
+        
+        # Map indices back to original order
+        visible_indices_array_signle_p = order_array[visible_indices_array_signle_p]
+
+        # Store indices
         self.visible_indices_array = np.concatenate([self.visible_indices_array, visible_indices_array_signle_p])
 
 
@@ -213,18 +217,7 @@ class Visibility:
 
         for visible_count in np.unique(self.visible_count_array):
             if visible_count > 0:
-                # Get indices for visible points that meet the criteria
-                visible_indices = np.where(self.visible_count_array == visible_count)[0]
-                
-                # Ensure Zg >= 0 for these points before coloring them
-                for idx in visible_indices:
-                    if self.points_array[idx, 2] >= 0:  # Check if Zg (z value) is non-negative
-                        self.points_array[idx, 3:] = colour_list[visible_count - 1]
-                    else:
-                        # If Zg < 0, do not color the point red
-                        # Optionally, color them black or leave as is
-                        # self.points_array[idx, 3:] = (0, 0, 0)  # Example to color them black
-                        pass
+                self.points_array[np.where(self.visible_count_array == visible_count), 3:] = colour_list[visible_count - 1]
             
 
         # Colour observed with blue
