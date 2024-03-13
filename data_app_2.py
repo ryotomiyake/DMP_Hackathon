@@ -3,10 +3,6 @@ from scipy.spatial import ConvexHull
 import laspy
 from data_visualise import Visibility
 
-def points_inside(point):
-
-    pass
-
 def main():
 
     visibility = Visibility(area_names=[0, 1, 2, 3], sampling="random", sample_ratio=100)
