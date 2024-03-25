@@ -1,14 +1,15 @@
 import numpy as np
 import laspy
 import tqdm
+import os
+import re
+import joblib
 
 class Visibility:
-    def __init__(self, area_names, sampling="random", sample_ratio=1000):
+    def __init__(self, area_names):
         # Initialize Visibility object
 
         self.area_names = area_names if isinstance(area_names, list) else [area_names]
-        self.sampling = sampling
-        self.sample_ratio = sample_ratio
         self.public_header_list = []
         self.n_points_total = 0
         self.points_array = np.empty((0, 6), dtype=float)
@@ -29,33 +30,72 @@ class Visibility:
             file_path = file_name + ".laz"
 
         return file_path
+    
+
+    def import_split_data(self, file_path, sample_ratio, sampling_centre, sampling_distance):
+
+        with laspy.open(file_path, mode='r') as las:
+            n_points = las.header.point_count
+            points = las.points
+            indices = np.random.choice(len(points), size=int(n_points/sample_ratio), replace=False)
+            file_points_array = np.column_stack((las.points['x'], las.points['y'], las.points['z'], las.points['red'], las.points['green'], las.points['blue']))[indices]
+
+            # Filter points within sampling_distance from sampling_centre
+            distance_array = np.sum(np.abs(file_points_array[:, :2] - sampling_centre), axis=1)
+            in_range_array = distance_array <= sampling_distance
+            file_points_array = file_points_array[in_range_array]
+
+        return file_points_array
 
 
-    def import_data(self, chunk_size=1000000):
+    def import_data(self, chunk_size=1000_000, sampling="random", sample_ratio=1000, sampling_centre=np.array((0, 0, 0)), sampling_distance=1000):
         # Import data from LAS file
 
-        # Open LAS file
-        for area_name in self.area_names:
+        # Store sampling method
+        self.sampling = sampling
+        self.sample_ratio = sample_ratio
 
-            file_path = self.generate_file_path(area_name)
-            with laspy.open(file_path, mode='r') as las:
-                self.public_header_list.append(las.header)
-                n_points = las.header.point_count
+        if self.sampling == "random":
 
-                file_points_array = np.full((n_points, 6), np.nan)
-                current_index = 0
-                for points in tqdm.tqdm(las.chunk_iterator(chunk_size)):
-                    file_points_array[current_index:current_index+chunk_size, 0] = points['x']
-                    file_points_array[current_index:current_index+chunk_size, 1] = points['y']
-                    file_points_array[current_index:current_index+chunk_size, 2] = points['z']
-                    file_points_array[current_index:current_index+chunk_size, 3] = points['red']
-                    file_points_array[current_index:current_index+chunk_size, 4] = points['green']
-                    file_points_array[current_index:current_index+chunk_size, 5] = points['blue']
-                    current_index += chunk_size
+            for area_name in self.area_names:
 
-                # Update points_array and n_points_total
+                file_path = self.generate_file_path(area_name)
+
+                with laspy.open(file_path, mode='r') as las:
+                    self.public_header_list.append(las.header)
+                    n_points_added = las.header.point_count
+
+                    file_points_array = np.full((n_points_added, 6), np.nan)
+                    current_index = 0
+                    for points in tqdm.tqdm(las.chunk_iterator(chunk_size)):
+                        file_points_array[current_index:current_index+chunk_size, 0] = points['x']
+                        file_points_array[current_index:current_index+chunk_size, 1] = points['y']
+                        file_points_array[current_index:current_index+chunk_size, 2] = points['z']
+                        file_points_array[current_index:current_index+chunk_size, 3] = points['red']
+                        file_points_array[current_index:current_index+chunk_size, 4] = points['green']
+                        file_points_array[current_index:current_index+chunk_size, 5] = points['blue']
+                        current_index += chunk_size
+
                 self.points_array = np.vstack((self.points_array, file_points_array))
-                self.n_points_total += n_points
+                self.n_points_total += n_points_added
+
+        elif self.sampling == "specific":
+
+            file_paths = []
+            for area_name in self.area_names:
+                pattern = re.compile(r"Area" + str(area_name) + r"_[0-9A-Z_]+_split_\d+\.laz")
+                directory = "split_laz"
+                for file_name in os.listdir(directory):
+                    if pattern.match(file_name):
+                        file_paths.append(os.path.join(directory, file_name))
+
+            results = joblib.Parallel(n_josb=-1)(
+                joblib.delayed(self.import_split_data)(file_path, sample_ratio, sampling_centre, sampling_distance) for file_path in file_paths
+            )
+
+            # Update points_array and n_points_total
+            self.points_array = np.vstack(results)
+            self.n_points_total = len(self.points_array)
 
 
     def raycast(self, p_array, n_xy, n_xz):
@@ -132,29 +172,69 @@ class Visibility:
         self.visible_indices_array = np.concatenate([self.visible_indices_array, visible_indices_array_signle_p])
 
 
-    def add_observeds(self, n_display_p=10_000, radius=0.25):
+    def add_observeds(self, n_display_p=10_000, shape="sphere", radius=0.25, width=0.5, height=3):
 
         self.n_display_p = n_display_p
 
         for single_p in self.p_array:
-            self._add_observeds_signle_p(single_p=single_p, n_display_p=self.n_display_p, radius=radius)
+            self._add_observeds_signle_p(single_p=single_p, n_display_p=self.n_display_p, shape=shape, radius=radius, width=width, height=height)
 
 
-    def _add_observeds_signle_p(self, single_p, n_display_p=10_000, radius=0.25):
+    def _add_observeds_signle_p(self, single_p, n_display_p=10_000, shape="sphere", radius=0.25, width=0.5, height=3):
         # Add point single_p to points_array to visualise single_p
 
-        # Generate random spherical coordinates
-        theta = np.random.uniform(0, 2*np.pi, n_display_p)
-        phi = np.random.uniform(0, np.pi, n_display_p)
+        if shape == "sphere":
+            # Generate random spherical coordinates
+            theta = np.random.uniform(0, 2*np.pi, n_display_p)
+            phi = np.random.uniform(0, np.pi, n_display_p)
 
-        # Convert spherical coordinates to cartesian coordinates
-        x = single_p[0] + radius * np.sin(phi) * np.cos(theta)
-        y = single_p[1] + radius * np.sin(phi) * np.sin(theta)
-        z = single_p[2] + radius * np.cos(phi)
+            # Convert spherical coordinates to cartesian coordinates
+            x_values = single_p[0] + radius * np.sin(phi) * np.cos(theta)
+            y_values = single_p[1] + radius * np.sin(phi) * np.sin(theta)
+            z_values = single_p[2] + radius * np.cos(phi)
 
-        # Stack the cartesian coordinates onto the existing points_array
-        display_p_array = np.column_stack((x, y, z, np.nan*np.ones_like(x), np.nan*np.ones_like(x), np.nan*np.ones_like(x)))
-        self.points_array = np.vstack((self.points_array, display_p_array))
+            # Stack the cartesian coordinates onto the existing points_array
+            display_p_array = np.column_stack((x_values, y_values, z_values, np.nan*np.ones_like(x_values), np.nan*np.ones_like(x_values), np.nan*np.ones_like(x_values)))
+            self.points_array = np.vstack((self.points_array, display_p_array))
+
+        elif shape == "cuboid":
+            # Define the boundaries of the cuboid
+            x_min = single_p[0] - width / 2
+            x_max = single_p[0] + width / 2
+            y_min = single_p[1] - width / 2
+            y_max = single_p[1] + width / 2
+            z_min = single_p[2] - height
+            z_max = single_p[2]
+
+            # Number of points on the top and side surface
+            n_top_surface_p = int(n_display_p * 0.2)
+            n_side_surface_p = n_display_p - n_top_surface_p  # Adjust ratio as needed
+
+            # Generate points on the top surface
+            x_top_surface = np.random.uniform(x_min, x_max, n_top_surface_p)
+            y_top_surface = np.random.uniform(y_min, y_max, n_top_surface_p)
+            z_top_surface = np.full(n_top_surface_p, z_max)
+
+            # Generate points on the side surfaces
+            x_side_surface = np.concatenate([
+                np.full(n_side_surface_p // 4, x_min),
+                np.full(n_side_surface_p // 4, x_max),
+                np.random.uniform(x_min, x_max, n_side_surface_p // 2)
+            ])
+            y_side_surface = np.concatenate([
+                np.random.uniform(y_min, y_max, n_side_surface_p // 2),
+                np.random.uniform(y_min, y_max, n_side_surface_p // 2),
+            ])
+            z_side_surface = np.random.uniform(z_min, z_max, n_side_surface_p)
+
+            # Combine points from both surfaces
+            x_values = np.concatenate([x_top_surface, x_side_surface])
+            y_values = np.concatenate([y_top_surface, y_side_surface])
+            z_values = np.concatenate([z_top_surface, z_side_surface])
+
+            # Stack the cartesian coordinates onto the existing points_array
+            display_p_array = np.column_stack((x_values, y_values, z_values, np.nan*np.ones_like(x_values), np.nan*np.ones_like(x_values), np.nan*np.ones_like(x_values)))
+            self.points_array = np.vstack((self.points_array, display_p_array))
 
         # Update the total number of points
         self.n_points_total += n_display_p
@@ -163,7 +243,7 @@ class Visibility:
         self.include_p = True
 
 
-    def colour(self, colour="original"):
+    def colour(self, background_colour="original", observed_colour=True, observer_colour=True):
         # Colour points based on visibility
 
         # Define functions to perform gamma expansion/compression
@@ -179,7 +259,7 @@ class Visibility:
         else:
             n_points_wo_p = self.n_points_total
 
-        if colour == "grey_scale":
+        if background_colour == "grey_scale":
 
             self.points_array[:n_points_wo_p, 3] = self.points_array[:n_points_wo_p, 3] / 65535
             self.points_array[:n_points_wo_p, 4] = self.points_array[:n_points_wo_p, 4] / 65535
@@ -195,46 +275,47 @@ class Visibility:
 
             self.points_array[:n_points_wo_p, 3:] = y_srgb.reshape(-1, 1)
         
-        elif colour == "grey":
+        elif background_colour == "grey":
 
             self.points_array[:n_points_wo_p, 3:] = [30000, 30000, 30000]
-            
-        # Colour visible points with red
-        colour_list = []
-        if self.n_p == 1:
-            colour_list = [(65535, 0, 0)]
-        else:
-            for i in range(1, self.n_p + 1):
-                ratio = (i - 1) / (self.n_p - 1)
-                if ratio < 0.5:
-                    r = int(65535 * ratio * 2)
-                    g = 65535
-                else:
-                    r = 65535
-                    g = int(65535 * (1 - ratio) * 2)
-                b = 0
-                colour_list.append((r, g, b))
-
-        for visible_count in np.unique(self.visible_count_array):
-            
-            if visible_count > 0:
-                # Get indices for visible points that meet the criteria
-                visible_indices = np.where(self.visible_count_array == visible_count)[0]
-
-                # Ensure Zg >= 0 for these points before coloring them
-                for idx in visible_indices:
-                    if self.points_array[idx, 2] >= 0:  # Check if Zg (z value) is non-negative
-                        self.points_array[idx, 3:] = colour_list[visible_count - 1]
+        
+        if observer_colour:
+            # Colour visible points with red
+            colour_list = []
+            if self.n_p == 1:
+                colour_list = [(65535, 0, 0)]
+            else:
+                for i in range(1, self.n_p + 1):
+                    ratio = (i - 1) / (self.n_p - 1)
+                    if ratio < 0.5:
+                        r = int(65535 * ratio * 2)
+                        g = 65535
                     else:
-                        # If Zg < 0, do not color the point red
-                        # Optionally, color them black or leave as is
-                        # self.points_array[idx, 3:] = (0, 0, 0)  # Example to color them black
-                        pass
-            
+                        r = 65535
+                        g = int(65535 * (1 - ratio) * 2)
+                    b = 0
+                    colour_list.append((r, g, b))
 
-        # Colour observed with blue
-        if self.include_p:
-            self.points_array[n_points_wo_p:, 3:6] = [0, 0, 65535]
+            for visible_count in np.unique(self.visible_count_array):
+                
+                if visible_count > 0:
+                    # Get indices for visible points that meet the criteria
+                    visible_indices = np.where(self.visible_count_array == visible_count)[0]
+
+                    # Ensure Zg >= 0 for these points before coloring them
+                    for idx in visible_indices:
+                        if self.points_array[idx, 2] >= 0:  # Check if Zg (z value) is non-negative
+                            self.points_array[idx, 3:] = colour_list[visible_count - 1]
+                        else:
+                            # If Zg < 0, do not color the point red
+                            # Optionally, color them black or leave as is
+                            # self.points_array[idx, 3:] = (0, 0, 0)  # Example to color them black
+                            pass
+            
+        if observed_colour:
+            # Colour observed with blue
+            if self.include_p:
+                self.points_array[n_points_wo_p:, 3:6] = [0, 0, 65535]
 
 
     def export_data(self, version=0):
