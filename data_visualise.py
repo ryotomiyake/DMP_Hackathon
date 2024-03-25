@@ -337,13 +337,3 @@ class Visibility:
         new_file_name = ''.join(map(str, self.area_names))
         new_file_path = r"Area" + new_file_name + r"_random_1_" + str(self.sample_ratio) + r"_ver" + str(version) + r".laz"
         new_las.write(new_file_path)
-
-
-# if __name__ == "__main__":
-#     file_path = input("Enter the file path: ")
-#     randomness = int(input("Enter the randomness: "))
-
-#     file_path = file_path.replace(".laz", "_1_" + str(randomness) + "_random.laz")
-
-#     lidar_processor = LidarProcessor(file_path)
-#     lidar_processor.load_data()
